@@ -1,13 +1,13 @@
 import time
-import threading
-import http.server
 import httpx
 from collections import deque
+from threading import Thread
+from http.server import BaseHTTPRequestHandler, HTTPServer
 from circuitbreaker import CircuitBreaker, CircuitBreakerError
 from prometheus_client import Gauge, Counter, Summary, start_http_server
 
 # Mock server
-class MockRequestHandler(http.server.BaseHTTPRequestHandler):
+class MockRequestHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         # Respond based on the URL path
         if self.path == "/status/200":
@@ -26,11 +26,11 @@ class MockRequestHandler(http.server.BaseHTTPRequestHandler):
 
 def run_mock_server():
     server_address = ('localhost', 8080)
-    httpd = http.server.HTTPServer(server_address, MockRequestHandler)
+    httpd = HTTPServer(server_address, MockRequestHandler)
     httpd.serve_forever()
 
 # Start the mock server in a separate thread
-mock_server_thread = threading.Thread(target=run_mock_server, daemon=True)
+mock_server_thread = Thread(target=run_mock_server, daemon=True)
 mock_server_thread.start()
 
 STATE = Gauge('feature_store_circuitbreaker_state', 'The states of the circuit breaker (0=closed, 1=open, 2=half_open)')
