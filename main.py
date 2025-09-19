@@ -39,7 +39,10 @@ CALLS_HISTOGRAM = Histogram(
     'Circuit breaker call durations',
     buckets=[.005, .01, .025, .05, .1, .25, .5, 1.0, 2.5, 5.0]
 )
-FAILURE_RATE_GAUGE = Gauge('feature_store_circuitbreaker_failure_rate', 'Failure rate of the circuit breaker over a rolling window')
+# The failure rate metric will be calculated as (failed_calls) / (successful_calls + failed_calls) in a window time
+# (eg. 4-5 mins window)
+SUCCESS_CALLS_COUNTER = Counter('feature_store_circuitbreaker_success_calls_total', 'Total number of successful calls')
+FAILED_CALLS_COUNTER = Counter('feature_store_circuitbreaker_failed_calls_total', 'Total number of failed calls')
 NOT_PERMITTED_CALLS_COUNTER = Counter('feature_store_circuitbreaker_not_permitted_calls_total', 'Total number of calls which have not been permitted')
 
 def our_fs_serving_api_call(should_fail: bool):
@@ -55,41 +58,22 @@ circuit_breaker = CircuitBreaker(
     expected_exception=(httpx.TimeoutException, httpx.HTTPStatusError)
 )
 
-class MetricsRecorder:
-    def __init__(self, window_size: int = 10):
-        self._call_history = deque(maxlen=window_size)
-
-    def record_success(self):
-        self._call_history.append(0)
-        self._update_metrics()
-
-    def record_failure(self):
-        self._call_history.append(1)
-        self._update_metrics()
-
-    def _update_metrics(self):
-        if len(self._call_history) > 0:
-            failure_rate = sum(self._call_history) / len(self._call_history)
-            FAILURE_RATE_GAUGE.set(failure_rate)
-
-metrics_recorder = MetricsRecorder(window_size=10)
-
 def circuit_breaker_with_metrics(func, *args, **kwargs):
     with CALLS_HISTOGRAM.time():
         try:
             print(f"Current internal circuit breaker state: {circuit_breaker.state}")
 
             result = circuit_breaker.decorate(func)(*args, **kwargs)
-            metrics_recorder.record_success()
+            SUCCESS_CALLS_COUNTER.inc()
             return result
         except CircuitBreakerError:
             NOT_PERMITTED_CALLS_COUNTER.inc()
             return "Call not permitted by circuit breaker."
         except httpx.HTTPError:
-            metrics_recorder.record_failure()
+            FAILED_CALLS_COUNTER.inc()
             return "Call failed and was recorded as a failure."
         except Exception:
-            metrics_recorder.record_failure()
+            FAILED_CALLS_COUNTER.inc()
             return "An unexpected error occurred."
         finally:
             if circuit_breaker.state == "closed":
